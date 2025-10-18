@@ -21,11 +21,13 @@ import logging
 import os
 import sys
 import traceback
+from urllib.parse import urlparse
 
 from decimal import Decimal
 
 import aiohttp
 import asyncpg
+from asyncpg import PostgresError
 import discord
 import fantasy_names as fn
 
@@ -34,6 +36,7 @@ from discord.ext import commands
 from discord.ext.commands.cooldowns import BucketType
 from discord.http import handle_message_parameters
 from redis import asyncio as aioredis
+from redis.exceptions import RedisError
 
 from classes.bucket_cooldown import Cooldown, CooldownMapping
 from classes.classes import Mage, Paragon, Raider, Ranger, Ritualist, Thief, Warrior
@@ -182,8 +185,25 @@ class Bot(commands.AutoShardedBot):
         self.trusted_session = aiohttp.ClientSession()
         redis_url = self.config.database.redis_connection_url()
 
-        pool = aioredis.ConnectionPool.from_url(redis_url, max_connections=20)
-        self.redis = aioredis.Redis(connection_pool=pool)
+        redis_client = None
+        redis_target = self._describe_redis_target(redis_url)
+        try:
+            pool = aioredis.ConnectionPool.from_url(redis_url, max_connections=20)
+            redis_client = aioredis.Redis(connection_pool=pool)
+            await redis_client.ping()
+        except (ValueError, RedisError) as exc:
+            if redis_client is not None:
+                await redis_client.close()
+            self.logger.critical(
+                "Unable to connect to Redis (%s): %s. Update the redis configuration "
+                "in config.toml or set REDIS_URL/UPSTASH_REDIS_URL before starting the bot.",
+                redis_target,
+                exc,
+            )
+            raise
+        else:
+            self.logger.info("Connected to Redis (%s)", redis_target)
+        self.redis = redis_client
         database_creds = {
             "database": self.config.database.postgres_name,
             "user": self.config.database.postgres_user,
@@ -191,9 +211,41 @@ class Bot(commands.AutoShardedBot):
             "host": self.config.database.postgres_host,
             "port": self.config.database.postgres_port,
         }
-        self.pool = await asyncpg.create_pool(
-            **database_creds, min_size=10, max_size=20, command_timeout=60.0
+        missing_postgres = [
+            key for key, value in database_creds.items() if value in {None, ""}
+        ]
+        if missing_postgres:
+            self.logger.critical(
+                "PostgreSQL configuration is missing %s. Provide these values in the "
+                "[database] section of config.toml or export a POSTGRES_URL/DATABASE_URL.",
+                ", ".join(sorted(missing_postgres)),
+            )
+            raise RuntimeError("PostgreSQL credentials are incomplete")
+        postgres_target = (
+            f"{database_creds['host']}:{database_creds['port']}/"
+            f"{database_creds['database']}"
         )
+        pool = None
+        try:
+            pool = await asyncpg.create_pool(
+                **database_creds, min_size=10, max_size=20, command_timeout=60.0
+            )
+            async with pool.acquire() as connection:
+                await connection.execute("SELECT 1;")
+        except (PostgresError, OSError) as exc:
+            if pool is not None:
+                await pool.close()
+            self.logger.critical(
+                "Unable to connect to PostgreSQL (%s) as user '%s': %s. Double-check the "
+                "database credentials in config.toml or the exported environment variables.",
+                postgres_target,
+                database_creds["user"],
+                exc,
+            )
+            raise
+        else:
+            self.logger.info("Connected to PostgreSQL (%s)", postgres_target)
+        self.pool = pool
 
         for extension in self.config.bot.initial_extensions:
             try:
@@ -227,6 +279,20 @@ class Bot(commands.AutoShardedBot):
         """Parses the Redis version out of the INFO command"""
         info = await self.redis.execute_command("INFO")
         return info["redis_version"]
+
+    def _describe_redis_target(self, url: str) -> str:
+        parsed = urlparse(url)
+        host = parsed.hostname or self.config.database.redis_host
+        port = parsed.port or self.config.database.redis_port
+        if parsed.scheme:
+            scheme = parsed.scheme
+        else:
+            scheme = "redis"
+        if parsed.path and parsed.path not in {"", "/"}:
+            database = parsed.path.lstrip("/")
+        else:
+            database = str(self.config.database.redis_database)
+        return f"{scheme}://{host}:{port}/{database}"
 
     # https://github.com/Rapptz/discord.py/blob/master/discord/ext/commands/bot.py#L131
     def user_can_interact(self, user_id: int) -> bool:
