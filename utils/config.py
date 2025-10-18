@@ -15,9 +15,104 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
-from typing import Any
+from __future__ import annotations
+
+import os
+from typing import Any, Callable, TypeVar
+from urllib.parse import quote, urlparse
 
 import tomli
+
+T = TypeVar("T")
+
+
+def _resolve_string(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    expanded = os.path.expandvars(value)
+    if expanded == value and value.startswith("${") and value.endswith("}"):
+        return None
+    return expanded
+
+
+def _apply_override(
+    *,
+    value: Any,
+    env_vars: tuple[str, ...],
+    default: T,
+    caster: Callable[[Any], T],
+) -> T:
+    for env_var in env_vars:
+        env_value = os.getenv(env_var)
+        if env_value:
+            return _cast_value(env_value, caster, default)
+
+    resolved = _resolve_string(value)
+    if resolved is None:
+        return default
+    return _cast_value(resolved, caster, default)
+
+
+def _cast_value(value: Any, caster: Callable[[Any], T], default: T) -> T:
+    if isinstance(value, type(default)) or (default is None and value is not None):
+        try:
+            return caster(value)
+        except (TypeError, ValueError):
+            return default
+
+    try:
+        return caster(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_postgres_url(url: str | None) -> dict[str, Any]:
+    if not url:
+        return {}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"postgres", "postgresql"}:
+        return {}
+
+    database = parsed.path.lstrip("/") or None
+    result: dict[str, Any] = {}
+    if parsed.hostname:
+        result["postgres_host"] = parsed.hostname
+    if parsed.port is not None:
+        result["postgres_port"] = parsed.port
+    if parsed.username:
+        result["postgres_user"] = parsed.username
+    if parsed.password:
+        result["postgres_password"] = parsed.password
+    if database:
+        result["postgres_name"] = database
+    return result
+
+
+def _parse_redis_url(url: str | None) -> dict[str, Any]:
+    if not url:
+        return {}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"redis", "rediss"}:
+        return {}
+
+    database = 0
+    if parsed.path:
+        try:
+            database = int(parsed.path.lstrip("/"))
+        except ValueError:
+            database = 0
+
+    result: dict[str, Any] = {"redis_url": url}
+    if parsed.hostname:
+        result["redis_host"] = parsed.hostname
+    if parsed.port is not None:
+        result["redis_port"] = parsed.port
+    if parsed.password:
+        result["redis_password"] = parsed.password
+    result["redis_database"] = database
+    return result
 
 
 class BotSection:
@@ -33,10 +128,22 @@ class BotSection:
     }
 
     def __init__(self, data: dict[str, Any]) -> None:
-        self.version = data.get("version", "unknown")
-        self.token = data["token"]
+        self.version = _resolve_string(data.get("version", "unknown")) or "unknown"
+        self.token = _apply_override(
+            value=data.get("token"),
+            env_vars=("BOT_TOKEN", "DISCORD_TOKEN"),
+            default=None,
+            caster=str,
+        )
+        if not self.token:
+            raise KeyError("token")
         self.initial_extensions = data.get("initial_extensions", [])
-        self.global_prefix = data.get("global_prefix", "$")
+        self.global_prefix = _apply_override(
+            value=data.get("global_prefix", "$"),
+            env_vars=("BOT_GLOBAL_PREFIX",),
+            default="$",
+            caster=lambda v: str(v) if v is not None else "$",
+        )
         self.is_beta = data.get("is_beta", True)
         self.is_custom = data.get("is_custom", False)
         self.global_cooldown = data.get("global_cooldown", 3)
@@ -81,23 +188,162 @@ class DatabaseSection:
         "postgres_port",
         "postgres_host",
         "postgres_password",
+        "postgres_url",
+        "redis_url",
         "redis_host",
         "redis_port",
+        "redis_password",
         "redis_database",
         "redis_shard_announce_channel",
     }
 
     def __init__(self, data: dict[str, Any]) -> None:
-        self.postgres_name = data.get("postgres_name", "idlerpg")
-        self.postgres_user = data.get("postgres_user", "jens")
-        self.postgres_port = data.get("postgres_port", 5432)
-        self.postgres_host = data.get("postgres_host", "127.0.0.1")
-        self.postgres_password = data.get("postgres_password", "owo")
-        self.redis_host = data.get("redis_host", "127.0.0.1")
-        self.redis_port = data.get("redis_port", 6379)
-        self.redis_database = data.get("redis_database", 0)
-        self.redis_shard_announce_channel = data.get(
-            "redis_shard_announce_channel", "guild_channel"
+        default_postgres = {
+            "postgres_name": "idlerpg",
+            "postgres_user": "jens",
+            "postgres_port": 5432,
+            "postgres_host": "127.0.0.1",
+            "postgres_password": "owo",
+        }
+
+        postgres_url = _resolve_string(
+            data.get("postgres_url")
+            or os.getenv("POSTGRES_URL")
+            or os.getenv("DATABASE_URL")
+            or os.getenv("SUPABASE_DB_URL")
+            or os.getenv("NEON_DB_URL")
+        )
+        postgres_defaults = {
+            **default_postgres,
+            **_parse_postgres_url(postgres_url),
+        }
+
+        self.postgres_url = postgres_url
+        self.postgres_name = _apply_override(
+            value=data.get("postgres_name", postgres_defaults["postgres_name"]),
+            env_vars=("POSTGRES_DB", "POSTGRES_DATABASE", "DB_NAME", "PGDATABASE"),
+            default=postgres_defaults["postgres_name"],
+            caster=lambda v: str(v) if v is not None else None,
+        )
+        self.postgres_user = _apply_override(
+            value=data.get("postgres_user", postgres_defaults["postgres_user"]),
+            env_vars=(
+                "POSTGRES_USER",
+                "POSTGRES_USERNAME",
+                "DB_USER",
+                "SUPABASE_USER",
+                "NEON_USER",
+                "PGUSER",
+            ),
+            default=postgres_defaults["postgres_user"],
+            caster=lambda v: str(v) if v is not None else None,
+        )
+        self.postgres_password = _apply_override(
+            value=data.get(
+                "postgres_password", postgres_defaults["postgres_password"]
+            ),
+            env_vars=(
+                "POSTGRES_PASSWORD",
+                "DB_PASSWORD",
+                "SUPABASE_PASSWORD",
+                "NEON_PASSWORD",
+                "PGPASSWORD",
+            ),
+            default=postgres_defaults["postgres_password"],
+            caster=lambda v: str(v) if v is not None else None,
+        )
+        self.postgres_host = _apply_override(
+            value=data.get("postgres_host", postgres_defaults["postgres_host"]),
+            env_vars=(
+                "POSTGRES_HOST",
+                "DB_HOST",
+                "SUPABASE_HOST",
+                "NEON_HOST",
+                "PGHOST",
+            ),
+            default=postgres_defaults["postgres_host"],
+            caster=lambda v: str(v) if v is not None else None,
+        )
+        self.postgres_port = _apply_override(
+            value=data.get("postgres_port", postgres_defaults["postgres_port"]),
+            env_vars=(
+                "POSTGRES_PORT",
+                "DB_PORT",
+                "SUPABASE_PORT",
+                "NEON_PORT",
+                "PGPORT",
+            ),
+            default=postgres_defaults["postgres_port"],
+            caster=lambda v: int(v) if v is not None else postgres_defaults["postgres_port"],
+        )
+
+        default_redis = {
+            "redis_host": "127.0.0.1",
+            "redis_port": 6379,
+            "redis_database": 0,
+            "redis_password": None,
+        }
+
+        redis_url = _resolve_string(
+            data.get("redis_url")
+            or os.getenv("REDIS_URL")
+            or os.getenv("REDIS_TLS_URL")
+            or os.getenv("UPSTASH_REDIS_URL")
+        )
+        redis_defaults = {
+            **default_redis,
+            **_parse_redis_url(redis_url),
+        }
+
+        self.redis_url = redis_defaults.get("redis_url")
+        self.redis_host = _apply_override(
+            value=data.get("redis_host", redis_defaults["redis_host"]),
+            env_vars=("REDIS_HOST", "UPSTASH_REDIS_HOST"),
+            default=redis_defaults["redis_host"],
+            caster=lambda v: str(v) if v is not None else None,
+        )
+        self.redis_port = _apply_override(
+            value=data.get("redis_port", redis_defaults["redis_port"]),
+            env_vars=("REDIS_PORT", "UPSTASH_REDIS_PORT"),
+            default=redis_defaults["redis_port"],
+            caster=lambda v: int(v) if v is not None else redis_defaults["redis_port"],
+        )
+        self.redis_database = _apply_override(
+            value=data.get("redis_database", redis_defaults["redis_database"]),
+            env_vars=("REDIS_DB", "UPSTASH_REDIS_DB"),
+            default=redis_defaults["redis_database"],
+            caster=lambda v: int(v) if v is not None else redis_defaults["redis_database"],
+        )
+        self.redis_password = _apply_override(
+            value=data.get("redis_password", redis_defaults.get("redis_password")),
+            env_vars=(
+                "REDIS_PASSWORD",
+                "UPSTASH_REDIS_PASSWORD",
+                "UPSTASH_REDIS_TOKEN",
+            ),
+            default=redis_defaults.get("redis_password"),
+            caster=lambda v: str(v) if v is not None else None,
+        )
+        self.redis_shard_announce_channel = _apply_override(
+            value=data.get("redis_shard_announce_channel", "guild_channel"),
+            env_vars=("REDIS_SHARD_ANNOUNCE_CHANNEL",),
+            default="guild_channel",
+            caster=lambda v: str(v) if v is not None else "guild_channel",
+        )
+
+    def redis_connection_url(self) -> str:
+        if self.redis_url:
+            return self.redis_url
+
+        if self.redis_password:
+            password = quote(self.redis_password, safe="")
+            auth_segment = f":{password}@"
+        else:
+            auth_segment = ""
+
+        return (
+            f"redis://{auth_segment}{self.redis_host}:{self.redis_port}/"
+            f"{self.redis_database}"
         )
 
 

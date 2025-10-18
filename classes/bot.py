@@ -180,10 +180,9 @@ class Bot(commands.AutoShardedBot):
         else:
             self.session = ProxiedClientSession(proxy_url=proxy_url)
         self.trusted_session = aiohttp.ClientSession()
-        pool = aioredis.ConnectionPool.from_url(
-            f"redis://{self.config.database.redis_host}:{self.config.database.redis_port}/{self.config.database.redis_database}",
-            max_connections=20,
-        )
+        redis_url = self.config.database.redis_connection_url()
+
+        pool = aioredis.ConnectionPool.from_url(redis_url, max_connections=20)
         self.redis = aioredis.Redis(connection_pool=pool)
         database_creds = {
             "database": self.config.database.postgres_name,

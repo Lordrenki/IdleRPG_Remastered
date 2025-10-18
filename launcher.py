@@ -195,7 +195,7 @@ class Main:
     def __init__(self) -> None:
         self.instances: list[Instance] = []
         pool = aioredis.ConnectionPool.from_url(
-            f"redis://{config.database.redis_host}:{config.database.redis_port}/{config.database.redis_database}",
+            config.database.redis_connection_url(),
             max_connections=2,
         )
         self.redis = aioredis.Redis(connection_pool=pool)

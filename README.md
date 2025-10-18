@@ -17,9 +17,47 @@ The IdleRPG Project is licensed under the terms of the [GNU Affero General Publi
 
 ## Running it
 
-### For development
+### Quick start with Docker Compose
 
-Note: This requires you to have Podman and Git working. Development instances will wipe storage when stopped.
+1. Copy the example configuration and environment files:
+
+   ```sh
+   cp config_example.toml config.toml
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and `config.toml` to include your Discord bot token and any database credentials. Every field in the `[database]` block accepts environment variables, so you can keep `config.toml` under version control and inject secrets at runtime.
+
+3. Launch the stack:
+
+   ```sh
+   docker compose up --build
+   ```
+
+By default the compose file provisions PostgreSQL and Redis containers and shares credentials with IdleRPG through environment variables. To point IdleRPG at hosted services instead, replace or remove the local `POSTGRES_*`/`REDIS_*` entries in `.env`, set `DATABASE_URL` or provider-specific variables for a Neon or Supabase instance, and provide a `REDIS_URL`/`UPSTASH_REDIS_URL` for providers such as Upstash. Leaving those variables set to the defaults continues to use the local containers.
+
+### Initialize the schema
+
+Once PostgreSQL is reachable you can bootstrap the schema with a single helper:
+
+```sh
+python scripts/init_db.py
+```
+
+Use `--config` and `--schema` to target different files if required.
+
+### Managed Postgres and Redis options
+
+IdleRPG's configuration loader automatically understands common connection strings:
+
+- **Neon / Supabase** &mdash; Export `DATABASE_URL`, `POSTGRES_URL`, or provider-specific variables (user, password, host, port) and the loader will split them into the fields IdleRPG expects.
+- **Upstash Redis** &mdash; Provide `REDIS_URL` or `UPSTASH_REDIS_URL` and the bot will connect over TLS with the correct password and database index.
+
+These environment variables can be placed directly in `.env` or in your deployment platform's secret manager without altering `config.toml`.
+
+### Legacy Podman workflow
+
+The original Podman scripts remain available for contributors who prefer that toolchain. Development instances will wipe storage when stopped.
 
 ```sh
 git clone https://git.travitia.xyz/Kenvyra/IdleRPG.git
@@ -29,16 +67,7 @@ podman build -t idlerpg:latest .
 podman run --rm -it --name idlerpg --pod idlerpgbeta -v $(pwd)/config.py:/idlerpg/config.py:Z idlerpg:latest
 ```
 
-### For hosting permanently
-
-This is fully unsupported and we only provide basic tools. The setup script might be outdated and is unmaintained.
-
-```sh
-git clone https://git.travitia.xyz/Kenvyra/IdleRPG.git
-cd IdleRPG
-./scripts/setup.sh
-systemctl start "podman-*"
-```
+Permanent hosting scripts (`./scripts/setup.sh`) are still unsupported and may require manual adjustments.
 
 ## Utility
 
