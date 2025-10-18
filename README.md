@@ -19,16 +19,23 @@ The IdleRPG Project is licensed under the terms of the [GNU Affero General Publi
 
 ### Quick start with Docker Compose
 
-1. Copy the example configuration and environment files:
+1. Copy the example environment file:
 
    ```sh
-   cp config_example.toml config.toml
    cp .env.example .env
    ```
 
-2. Edit `.env` and `config.toml` to include your Discord bot token and any database credentials. Every field in the `[database]` block accepts environment variables, so you can keep `config.toml` under version control and inject secrets at runtime.
+2. Generate `config.toml` with the interactive helper. It walks through the required Discord and database credentials and writes a validated configuration file for you:
 
-3. Launch the stack:
+   ```sh
+   python scripts/configure.py
+   ```
+
+   You can re-run the helper at any time to update secrets or optional integrations.
+
+3. Edit `.env` to include your Discord bot token and any database credentials the compose stack should provision for you. Every field in the `[database]` block of the generated `config.toml` accepts environment variables, so you can keep the file under version control and inject secrets at runtime if preferred.
+
+4. Launch the stack:
 
    ```sh
    docker compose up --build
@@ -54,6 +61,16 @@ IdleRPG's configuration loader automatically understands common connection strin
 - **Upstash Redis** &mdash; Provide `REDIS_URL` or `UPSTASH_REDIS_URL` and the bot will connect over TLS with the correct password and database index.
 
 These environment variables can be placed directly in `.env` or in your deployment platform's secret manager without altering `config.toml`.
+
+### Interactive configuration for manual deployments
+
+Outside Docker Compose you can still run the helper before starting the launcher:
+
+```sh
+python scripts/configure.py --config /path/to/config.toml
+```
+
+The script validates connection strings, enforces the presence of required PostgreSQL and Redis credentials, and ensures IdleRPG can authenticate with Discord before you launch the bot.
 
 ### Legacy Podman workflow
 
