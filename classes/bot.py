@@ -29,7 +29,7 @@ import asyncpg
 import discord
 import fantasy_names as fn
 
-from discord import AllowedMentions
+from discord import AllowedMentions, app_commands
 from discord.ext import commands
 from discord.ext.commands.cooldowns import BucketType
 from discord.http import handle_message_parameters
@@ -59,11 +59,19 @@ class Bot(commands.AutoShardedBot):
         mentions = AllowedMentions.none()
         mentions.users = True
 
+        intents = kwargs.pop("intents", None)
+        if intents is None:
+            intents = discord.Intents.default()
+            intents.message_content = True
+
         super().__init__(
             allowed_mentions=mentions,
             command_prefix=self.command_prefix,
+            intents=intents,
             **kwargs,
         )  # we overwrite the prefix when it is connected
+
+        self.tree = app_commands.CommandTree(self)
 
         # setup stuff
         self.version = self.config.bot.version
@@ -197,6 +205,24 @@ class Bot(commands.AutoShardedBot):
 
         self.redis_version = await self.get_redis_version()
         await self.load_bans()
+
+        await self._sync_application_commands()
+
+    async def _sync_application_commands(self) -> None:
+        guild_ids = set()
+        support_server_id = getattr(self.config.game, "support_server_id", None)
+        if support_server_id:
+            guild_ids.add(int(support_server_id))
+
+        if hasattr(self.config.bot, "development_guilds"):
+            guild_ids.update(int(gid) for gid in self.config.bot.development_guilds)
+
+        if guild_ids:
+            for guild_id in guild_ids:
+                guild = discord.Object(id=guild_id)
+                await self.tree.sync(guild=guild)
+        else:
+            await self.tree.sync()
 
     async def get_redis_version(self):
         """Parses the Redis version out of the INFO command"""
