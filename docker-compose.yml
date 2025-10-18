@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./config.toml:/idlerpg/config.toml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-idlerpg}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "${FORWARD_POSTGRES_PORT:-5432}:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: ["sh", "-c", "if [ -n \"$REDIS_PASSWORD\" ]; then redis-server --save '' --appendonly yes --requirepass \"$REDIS_PASSWORD\"; else redis-server --save '' --appendonly yes; fi"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - |
+          if [ -n "$REDIS_PASSWORD" ]; then redis-cli -a "$REDIS_PASSWORD" ping; else redis-cli ping; fi
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "${FORWARD_REDIS_PORT:-6379}:6379"
+
+volumes:
+  postgres-data:
+  redis-data:

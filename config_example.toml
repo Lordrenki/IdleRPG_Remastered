@@ -1,6 +1,6 @@
 [bot]
 version = "4.11.1"
-token = "my cool bot token"
+token = "${BOT_TOKEN}"
 initial_extensions = [
     "cogs.locale",
     "cogs.owner",
@@ -38,7 +38,7 @@ initial_extensions = [
     "cogs.scheduler",
     "cogs.error_handler",
 ]
-global_prefix = "$"
+global_prefix = "${BOT_GLOBAL_PREFIX}"
 is_beta = true
 is_custom = false
 global_cooldown = 3
@@ -59,15 +59,18 @@ id = 1234
 tier = "basic"
 
 [database]
-postgres_name = "database_name"
-postgres_user = "database_user"
-postgres_password = "database_password"
-postgres_host = "localhost"
-postgres_port = 5432
-redis_host = "localhost"
-redis_port = 6379
-redis_database = 0
-redis_shard_announce_channel = "guild_channel"
+postgres_url = "${DATABASE_URL}"
+postgres_name = "${POSTGRES_DB}"
+postgres_user = "${POSTGRES_USER}"
+postgres_password = "${POSTGRES_PASSWORD}"
+postgres_host = "${POSTGRES_HOST}"
+postgres_port = "${POSTGRES_PORT}"
+redis_url = "${REDIS_URL}"
+redis_host = "${REDIS_HOST}"
+redis_port = "${REDIS_PORT}"
+redis_database = "${REDIS_DB}"
+redis_password = "${REDIS_PASSWORD}"
+redis_shard_announce_channel = "${REDIS_SHARD_ANNOUNCE_CHANNEL}"
 
 [statistics]
 topggtoken = "topggtoken"
