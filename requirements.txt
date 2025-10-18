@@ -9,7 +9,7 @@ chess
 humanize
 fantasy_names
 dateparser
-discord.py
+discord.py==2.3.2
 aiowiki
 sentry_sdk
 redis[hiredis]
